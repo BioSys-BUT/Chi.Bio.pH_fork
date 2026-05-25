@@ -100,6 +100,15 @@ function updateData(data){
         document.getElementById("TempCurrent3").innerHTML = data.ThermometerIR.current.toFixed(3);
         document.getElementById("ThermostatTarget").innerHTML=data.Thermostat.target.toFixed(3);
         
+        // Update pH Control Values
+        document.getElementById("pHCurrent").innerHTML = data.pH.current.toFixed(3);
+        document.getElementById("pHTarget").innerHTML = data.pH.target.toFixed(3);
+        document.getElementById("pHTolerance").innerHTML = data.pH.tolerance.toFixed(3);
+        //document.getElementById("pHvoladded").innerHTML = data.pH.voladded.toFixed(3); data here are corrupted or doesnt exists
+         //document.getElementById("pHmaxvol").innerHTML = data.pH.maxvol.toFixed(3);
+        //document.getElementById("pHflowrate").innerHTML = data.pH.flowrate.toFixed(1);
+        document.getElementById("pHcycleTime").innerHTML = data.pH.cycleTime.toFixed(1);
+        //
         
         document.getElementById("ODCurrent").innerHTML = data.OD.current.toFixed(3);
         
@@ -288,6 +297,38 @@ function updateData(data){
              
         } else {
              document.getElementById("ThermostatSwitch").setAttribute("style", "")
+        }
+
+        if (data.pH.ON==1){
+             document.getElementById("pHSwitch").setAttribute("style", "border-style:inset;background-color:lightblue")
+             
+        } else {
+             document.getElementById("pHSwitch").setAttribute("style", "")
+        }
+
+        // PH
+        var activePump = data.pH.pump; 
+        for (var i = 1; i <= 4; i++) {
+            var pumpID = "pHPump" + i;
+            
+            document.getElementById(pumpID).setAttribute("style", "");
+     
+            if (pumpID === activePump) {
+                document.getElementById(pumpID).setAttribute("style", "border-style:inset;background-color:lightblue");
+            }
+        }
+
+      
+        if (data.pH.mode == "Acid") { 
+            document.getElementById("AcidAddition").setAttribute("style", "border-style:inset;background-color:lightblue");
+            document.getElementById("BaseAddition").setAttribute("style", "");
+        } else if (data.pH.mode == "Base") {
+            document.getElementById("AcidAddition").setAttribute("style", "");
+            document.getElementById("BaseAddition").setAttribute("style", "border-style:inset;background-color:lightblue");
+        } else {
+            
+            document.getElementById("AcidAddition").setAttribute("style", "");
+            document.getElementById("BaseAddition").setAttribute("style", "");
         }
        
         if (data.Pump1.ON==1){
