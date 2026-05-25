@@ -95,7 +95,7 @@ sysDevices = {'M0' : {
     'pHProbe' : {'device' : 0},
     'ThermometerIR' : {'device' : 0,'address' :0},
     'DAC' : {'device' : 0},
-    'Pumps' : {'device' : 0,'startup' : 0, 'frequency' : 0},
+    'Pumps' : {'device' : 0,'startup' : 0, 'frequency' : 0, 'available' : 0},
     'PWM' : {'device' : 0,'startup' : 0, 'frequency' : 0},
     'Pump1' : {'thread' : 0,'threadCount' : 0, 'active' : 0},
     'Pump2' : {'thread' : 0,'threadCount' : 0, 'active' : 0},
@@ -384,9 +384,22 @@ def initialise(M):
     sysDevices[M]['pHProbe']['device'].__init__(address=99,bus=2)
     sysDevices[M]['DAC']['device']=I2C.get_i2c_device(0x48,2) #Get DAC on Bus 2!!!
     sysDevices[M]['AS7341']['device']=I2C.get_i2c_device(0x39,2) #Get OD Chip on Bus 2!!!!!
-    sysDevices[M]['Pumps']['device']=I2C.get_i2c_device(0x61,2) #Get OD Chip on Bus 2!!!!!
-    sysDevices[M]['Pumps']['startup']=0
-    sysDevices[M]['Pumps']['frequency']=0x1e #200Hz PWM frequency
+    # Try to initialize pumps, but allow system to continue if pumps are not connected
+    # We start with available=0 and will only set it to 1 if communication succeeds
+    sysDevices[M]['Pumps']['available']=0
+    try:
+        sysDevices[M]['Pumps']['device']=I2C.get_i2c_device(0x61,2) #Get OD Chip on Bus 2!!!!!
+        sysDevices[M]['Pumps']['startup']=0
+        sysDevices[M]['Pumps']['frequency']=0x1e #200Hz PWM frequency
+        # Note: We don't test communication here because the multiplexer may not be set up yet
+        # Communication will be tested when first used, and failures will be handled gracefully
+        print(str(datetime.now()) + " Pumps device object created for " + str(M) + " (availability will be determined on first use)")
+    except Exception as e:
+        sysDevices[M]['Pumps']['device']=0
+        sysDevices[M]['Pumps']['startup']=0
+        sysDevices[M]['Pumps']['frequency']=0x1e
+        sysDevices[M]['Pumps']['available']=0
+        print(str(datetime.now()) + " Warning: Pumps device not found for " + str(M) + ". System will continue without pumps. Error: " + str(e))
     sysDevices[M]['PWM']['device']=I2C.get_i2c_device(0x60,2) #Get OD Chip on Bus 2!!!!!
     sysDevices[M]['PWM']['startup']=0
     sysDevices[M]['PWM']['frequency']=0x03# 0x14 = 300hz, 0x03 is 1526 Hz PWM frequency for fan/LEDs, maximum possible. Potentially dial this down if you are getting audible ringing in the device! 
@@ -727,6 +740,12 @@ def PumpModulation(M,item):
     global sysItems
     global sysDevices
     
+    # Check if pumps are available before attempting to use them
+    if sysDevices[M]['Pumps']['available'] == 0:
+        print(str(datetime.now()) + " Warning: Pump modulation requested for " + str(item) + " but pumps are not available for " + str(M))
+        sysData[M][item]['ON']=0  # Turn off the pump since it's not available
+        return
+    
     sysDevices[M][item]['threadCount']=(sysDevices[M][item]['threadCount']+1)%100 #Index of the particular thread running.
     currentThread=sysDevices[M][item]['threadCount']
     
@@ -882,6 +901,11 @@ def pHControlPump(M):
     if (M=="0"):
         M=sysItems['UIDevice']
 
+    # Check if pumps are available before attempting to use them
+    if sysDevices[M]['Pumps']['available'] == 0:
+        print(str(datetime.now()) + " Warning: pH control pump requested but pumps are not available for " + str(M))
+        return
+
     Pump = sysData[M]['pHControl']['PumpNumber']    
     wait_time = sysData[M]['pHControl']['pumpspeed']
 
@@ -996,8 +1020,13 @@ def measurepH(M,placeholder):
     current_temp = sysData[M]['ThermometerIR']['current']
    
     sysData[M]['pH']['current'] =I2CCom(M,'pHProbe',0,8,0x63,'RT,'+str(current_temp),0)   
+    
+    print("HERE:")
+    print(sysData[M]['pH']['current'])
 
-    time.sleep(30)  
+    # pH measurement interval: 5 seconds (changed from 30 seconds)
+    # To change back to 30 seconds, replace 5 with 30 in the line below
+    time.sleep(5)  
             
     if (sysData[M]['Experiment']['ON']==1 and sysDevices[M]['pHmeasure']['threadCount']==currentThread):
         sysDevices[M]['pHmeasure']['thread']=Thread(target = measurepH, args=(M,placeholder))
@@ -1032,12 +1061,17 @@ def pHControl(M,placeholder):
 
 
     #consider when pH is turned "ON"
+    # Only attempt to pump if pumps are available
     if sysData[M]['Experiment']['ON']==1 and sysData[M]['pH']['ON']==1 and Volume_Added  < Max_Volume and TurnonPump == True:
-        
-        pHControlPump(M)
-
-        #calculate the volume added to ensure we don't over flow the reactor
-        sysData[M]['pHControl']['voladded'] = sysData[M]['pHControl']['voladded']+(sysData[M]['pHControl']['flowrate']*.001) #multiply by .001 to convert to mL
+        # Check if pumps are available before attempting to use them
+        if sysDevices[M]['Pumps']['available'] == 1:
+            pHControlPump(M)
+            #calculate the volume added to ensure we don't over flow the reactor
+            sysData[M]['pHControl']['voladded'] = sysData[M]['pHControl']['voladded']+(sysData[M]['pHControl']['flowrate']*.001) #multiply by .001 to convert to mL
+        else:
+            # Pumps not available, but pH control is still active (measuring pH)
+            # Log that adjustment would be needed but pumps are not available
+            print(str(datetime.now()) + " pH control: Adjustment needed (pH=" + str(CurrentpH) + ", target=" + str(TargetpH) + ") but pumps not available for " + str(M))
     
     time.sleep(pHcycleTime)
 
@@ -1548,6 +1582,17 @@ def I2CCom(M,device,rw,hl,data1,data2,SMBUSFLAG):
     global sysData
     global sysDevices
 
+    # Check if pumps device is available when trying to communicate with it
+    # This check happens before lock acquisition to avoid blocking other threads
+    if device == 'Pumps':
+        if sysDevices[M]['Pumps']['available'] == 0:
+            # Pumps are not available, return 0 to indicate no communication
+            return 0
+        # Also check if device object is None or 0 (not initialized)
+        if sysDevices[M]['Pumps']['device'] == 0 or sysDevices[M]['Pumps']['device'] is None:
+            sysDevices[M]['Pumps']['available'] = 0
+            return 0
+    
     # Since the pump is on for such a short time when controlling pH any other traffic during this time can cause the pump 
     # to run to long and add to much acid or base, therefore when we are using the pumps to control pH we delay all other traffic
     if pHControlPumpFlag == 'active' and (device != 'Pumps' or sysData[M]['pHControl']['pumpingactive'] != M):
@@ -1651,13 +1696,40 @@ def I2CCom(M,device,rw,hl,data1,data2,SMBUSFLAG):
             out=0
             sysData[M]['present']=0
             tries=-1
-        if tries>10: #In this case something else has gone wrong, so we panic.
-            sysItems['Watchdog']['ON']=0 #Basically this will crash all the electronics and the software. 
+        # Handle pump communication failures gracefully - mark pumps as unavailable instead of crashing
+        if (device=="Pumps" and tries>=3): #After 3 failed attempts, mark pumps as unavailable
+            sysDevices[M]['Pumps']['available']=0
             out=0
-            sysData[M]['present']=0
-            print(str(datetime.now()) + 'Failed to communicate to a device 10 times. Disabling hardware and software!')
+            print(str(datetime.now()) + ' Pumps device communication failed after ' + str(tries) + ' attempts for ' + str(M) + '. Marking pumps as unavailable and continuing.')
             tries=-1
-            os._exit(4)
+            # Release the lock and disconnect multiplexer before returning
+            try:
+                sysItems['Multiplexer']['device'].write8(int(0x00),int(0x00))
+            except:
+                pass
+            lock.release()  # Release the lock before returning
+            return 0
+        if tries>10: #In this case something else has gone wrong, so we panic.
+            # Don't crash if it's the pumps device - just mark it as unavailable
+            if device == "Pumps":
+                sysDevices[M]['Pumps']['available']=0
+                out=0
+                print(str(datetime.now()) + ' Pumps device communication failed 10+ times for ' + str(M) + '. Marking pumps as unavailable and continuing.')
+                tries=-1
+                # Release the lock and disconnect multiplexer before returning
+                try:
+                    sysItems['Multiplexer']['device'].write8(int(0x00),int(0x00))
+                except:
+                    pass
+                lock.release()  # Release the lock before returning
+                return 0
+            else:
+                sysItems['Watchdog']['ON']=0 #Basically this will crash all the electronics and the software. 
+                out=0
+                sysData[M]['present']=0
+                print(str(datetime.now()) + 'Failed to communicate to a device 10 times. Disabling hardware and software!')
+                tries=-1
+                os._exit(4)
                 
     time.sleep(0.0005)
     
@@ -1896,6 +1968,11 @@ def setPWM(M,device,channels,fraction,ConsecutiveFails):
     #Sets up the PWM chip (either the one in the reactor or on the pump board)
     global sysItems
     global sysDevices
+    
+    # Check if pumps are available when trying to use Pumps device
+    if device == 'Pumps' and sysDevices[M]['Pumps']['available'] == 0:
+        # Pumps are not available, skip PWM operations for pumps
+        return
     
     if sysDevices[M][device]['startup']==0: #The following boots up the respective PWM device to the correct frequency. Potentially there is a bug here; if the device loses power after this code is run for the first time it may revert to default PWM frequency.
         I2CCom(M,device,0,8,0x00,0x10,0) #Turns off device. Also disables all-call functionality at bit 0 so it won't respond to address 0x70
